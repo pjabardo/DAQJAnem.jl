@@ -1,5 +1,6 @@
 module DAQJAnem
 
-# Write your package code here.
+include("daq.jl")
+#include("hdf5.jl")
 
 end
