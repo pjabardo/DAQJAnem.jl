@@ -7,45 +7,50 @@ import Dates: now
 export DaqJAnem
 export devname, devtype, samplingrate, daqconfigdev, daqstart, daqread, daqacquire
 export samplingrate, samplingtimes, samplinghours, samplingperiod
+export daqaddinput, tempchans, tempchans!, loadtemp!, readchannels
 
+export readpressure, readpressuretemp, readhumidity, readhumiditytemp
+export readtemperature, readaichan
 
+abstract type AbstractDaqJAnem <: AbstractInputDev end
 
+@enum JANEM_AQ JANEM_AI JANEM_ENV JANEM_BOTH
 
-mutable struct DaqJAnem <: AbstractInputDev
+mutable struct DaqJAnem <: AbstractDaqJAnem
     devname::String
     devtype::String
     ipaddr::IPv4
     port::Int
-    buffer::CircularBuffer{NTuple{4,Int16}}
+    buffer::CircularBuffer{NTuple{5,Int16}}
     task::DaqTask
     config::DaqConfig
-    chans::DaqChannels{Int}
+    chans::DaqChannels{Vector{Int}}
     usethread::Bool
     ttot::Float64
-    env::Matrix{Float64}
+    temp::Vector{UInt64}
 end
 
 
 
 
 "Returns the IP address of the device"
-ipaddr(dev::DaqJAnem) = dev.ipaddr
+ipaddr(dev::AbstractDaqJAnem) = dev.ipaddr
 
 "Returns the port number used for TCP/IP communication"
-portnum(dev::DaqJAnem) = dev.port
+portnum(dev::AbstractDaqJAnem) = dev.port
 
-DAQCore.devtype(dev::DaqJAnem) = "DaqJAnem"
+DAQCore.devtype(dev::AbstractDaqJAnem) = "DaqJAnem"
 
 "Is DaqJAnem acquiring data?"
-DAQCore.isreading(dev::DaqJAnem) = isreading(dev.task)
+DAQCore.isreading(dev::AbstractDaqJAnem) = isreading(dev.task)
 
 "How many samples have been read?"
-DAQCore.samplesread(dev::DaqJAnem) = samplesread(dev.task)
+DAQCore.samplesread(dev::AbstractDaqJAnem) = samplesread(dev.task)
 
 "Convert number to string justifying to the right by padding with zeros"
 numstring(x::Integer, n=2) = string(10^n+x)[2:end]
 
-function Base.show(io::IO, dev::DaqJAnem)
+function Base.show(io::IO, dev::AbstractDaqJAnem)
     println(io, "DaqJAnem")
     println(io, "    Dev Name: $(devname(dev))")
     println(io, "    IP: $(string(dev.ipaddr))")
@@ -72,7 +77,7 @@ function openjanem(ipaddr::IPv4, port=9525,  timeout=5)
     return sock
 end
 
-openjanem(dev::DaqJAnem,  timeout=5) = openjanem(ipaddr(dev), portnum(dev), timeout)
+openjanem(dev::AbstractDaqJAnem,  timeout=5) = openjanem(ipaddr(dev), portnum(dev), timeout)
 
 
 function openjanem(fun::Function, ip, port=9525, timeout=5)
@@ -86,7 +91,7 @@ function openjanem(fun::Function, ip, port=9525, timeout=5)
     end
 end
 
-function openjanem(fun::Function, dev::DaqJAnem, timeout=5)
+function openjanem(fun::Function, dev::AbstractDaqJAnem, timeout=5)
     io = openjanem(ipaddr(dev), portnum(dev), timeout)
     try
         fun(io)
@@ -100,12 +105,16 @@ end
 function setvar(io, var, val)
     println(io, "SET $var $val")
     cmd = readline(io)
-    ok = readline(io)
-    return ok
-    
+    ok = strip(readline(io))
+    if ok != "OK"
+        err = parse(Int, strip(readline(io)))
+        readline(io)
+        error("Error setting $var to value $val: code $err")
+    end
+    return 0
 end
 
-function status(dev::DaqJAnem)
+function status(dev::AbstractDaqJAnem)
     openjanem(ipaddr(dev), portnum(dev), 1) do io
         status(io)
     end
@@ -119,73 +128,171 @@ end
   
     
 
-function DaqJAnem(devname="Anemometer", ipaddr="192.168.0.101";
-                  timeout=10, buflen=100_000, tag="", sn="",usethread=true)
+function DaqJAnem(; devname="Anemometer", ip="192.168.0.100",
+                  timeout=10, buflen=100_000, port=9525, tag="", sn="",usethread=true)
     dtype="DaqJAnem"
-    ip = IPv4(ipaddr)
-    port = 9525
+    ipaddr = IPv4(ip)
     
-    openjanem(ip, port, timeout) do io
+    openjanem(ipaddr, port, timeout) do io
         setvar(io, "AVG", 1)
         setvar(io, "FPS", 1)
     end
 
-    config = DaqConfig(ip=ipaddr, port=9525, AVG=1, FPS=1)
-    buf = CircularBuffer{NTuple{4,Int16}}(buflen)
+    config = DaqConfig(ip=ip, port=9525, AVG=1, FPS=1)
+    buf = CircularBuffer{NTuple{5,Int16}}(buflen)
     task = DaqTask()
-    ch = DaqChannels(["E0"], 0)
-    env = zeros(Float64,5,2)
+    ch = DaqChannels(["E0"], [0])
+
+    temp = openjanem(ipaddr, port, 2) do io
+        clearchans(io)
+        addsinglechan(io, 0)
+        tempchans(io)
+    end
     
-    return DaqJAnem(devname, dtype, ip, 9525, buf, task, config,
-                    ch, usethread, 0.0, env)
+    return DaqJAnem(devname, dtype, ipaddr, 9525, buf, task, config,
+                    ch, usethread, 0.0, temp)
     
 end
 
+function clearchans(io::TCPSocket) 
+    println(io, "CLEARCHANS")
+    s = readline(io)
+    if strip(s) != "OK"
+        error("Expected 'OK', got $s")
+    end
+end
+
+clearchans(dev::DaqJAnem, timeout=2) = openjanem(dev,timeout) do io
+    clearchans(io)
+end
+
+function addsinglechan(io::TCPSocket, ch)
+    println(io, "ADDCHAN $ch")
+    ok = strip(readline(io))
+    if ok != "OK"
+        if ok == "ERR"
+            err = parse(Int, strip(readline(io)))
+            readline(io)
+            error("Error adding channel $ch: code $err")
+        else
+            error("Unknown error while adding channel $ch")
+        end
+    end
+end
+
+
+function tempchans(io::TCPSocket)
+    println(io, "TEMPCHANS")
+    readline(io)
+    s = strip(readline(io))
+    N = parse(Int, s)
+    TID = UInt64[]
+    for i in 1:N
+        s = split(strip(readline(io)))
+        id = UInt64(0)
+        m = 0
+        for sk in s
+            k = parse(UInt8, sk)
+            id += k << m
+            m += 8
+        end
+        push!(TID, id)
+    end
+    return TID
+end
+
+function tempchans(dev::AbstractDaqJAnem)
+    openjanem(dev, 2) do io
+        tempchans(io)
+    end
+end
+
+function tempchans!(dev::AbstractDaqJAnem)
+    temp = openjanem(dev, 2) do io
+        tempchans(io)
+    end
+    dev.temp = temp
+    temp
+end
+
+function loadtemp!(io::TCPSocket)
+
+    println(io, "LOADTEMP")
+    readline(io)
+    s = strip(readline(io))
+    N = parse(Int, s)
+    ok = strip(readline(io))
+    if ok != "OK"
+        error("Error loading DS18B20 temperature sensor info.")
+    end
+    
+end
+
+function readchannels(io::TCPSocket)
+    println(io, "CHANS")
+    readline(io)
+    N = parse(Int, strip(readline(io)))
+    chans = zeros(Int, N)
+    for i in 1:N
+        n1 = parse(Int, strip(readline(io)))
+        chans[i] = n1
+    end
+    return chans
+end
+readchannels(dev::DaqJAnem, timeout=3) = openjanem(dev, timeout) do io
+    readchannels(io)
+end
+
+function DAQCore.daqaddinput(dev::DaqJAnem, chans=0; names="E")
+    for c in chans
+        if c < 0 || c > 3
+            error("Channels should be 0-3. Got '$c'")
+        end
+    end
+    if !isa(chans, AbstractVector)
+        chans = [chans]
+    elseif isa(chans, AbstractVector)
+        chans = collect(chans)
+    end
+    
+    # I hope we didn't have any errors
+    if names == ""
+        chnames = chans .* ""
+    elseif isa(names, AbstractString) || isa(names, Symbol) ||
+        isa(names, AbstractChar)
+        chnames = [string(names) * string(ch) for ch in chans]
+    elseif isa(names, AbstractVector)
+        chnames = [string(c) for c in names]
+    end
+
+    if length(chnames) != length(chans)
+        error("'names' should have the same length as 'chans'")
+    end
+    
+    openjanem(dev, 2) do io
+        clearchans(io)
+        for c in chans
+            addsinglechan(io, c)
+        end
+    end
+
+    dev.chans = DaqChannels(chnames, chans)
+    
+    
+        
+end
 
 function DAQCore.daqconfigdev(dev::DaqJAnem; AVG=1, FPS=1)
-    openjanem(ipaddr(dev), portnum(dev), 1) do io
-        ok = setvar(io, "AVG", AVG)
-        if ok != "OK"
-            error("Error in `SET AVG $AVG`")
-        else
-            iparam!(dev.config, "AVG", AVG)
-        end
+    openjanem(dev, 3) do io
+        setvar(io, "AVG", AVG)
+        iparam!(dev.config, "AVG", AVG)
         
-        ok = setvar(io, "FPS", FPS)
-        if ok != "OK"
-            error("Error in `SET FPS $FPS`")
-        else
-            iparam!(dev.config, "FPS", FPS)
-
-        end
+        setvar(io, "FPS", FPS)
+        iparam!(dev.config, "FPS", FPS)
     end
     
 end
 
-
-function envconds(io::TCPSocket)
-
-    println(io, "ENV")
-    s = readline(io)
-    N = parse(Int, s)
-
-    x = Float64[]
-    for i in 1:N
-        s = readline(io)
-        xi = parse(Float64,s)
-        push!(x, xi)
-    end
-    ok = readline(io)
-    if ok != "OK"
-        error("Sometinh went wrong when reading env conds -> $ok")
-    end
-
-    return x
-end
-
-envconds(dev::DaqJAnem) =  openjanem(ipaddr(dev), portnum(dev), 5) do io
-    envconds(io)
-end
 
 
 function scan!(dev::DaqJAnem) 
@@ -195,10 +302,11 @@ function scan!(dev::DaqJAnem)
 
     buf = dev.buffer
     empty!(buf)
-    
+
+    exthrown = false # No exception thrown!
+
     dev.ttot = 0.0
     openjanem(ipaddr(dev), portnum(dev), 5) do io
-        dev.env[:,1] .= envconds(io)
         tsk.time = now()
         println(io, "SCAN")
         tsk.isreading = true
@@ -207,28 +315,61 @@ function scan!(dev::DaqJAnem)
         s = readline(io)
         K = parse(Int, s)
         x = zeros(Int16,K) 
-        t0 = time_ns()
+        t = 0.0
         for i in 1:N
-            for k in 1:K
-                s = readline(io)
-                xi = parse(Int16, s)
-                x[k] = xi
+            try
+                s = strip(readline(io))
+                ss = split(s)
+                idx = parse(Int, ss[1])
+                t = parse(Float64, ss[2]) 
+                for k in 1:K
+                    xi = parse(Int16, ss[k+2])
+                    x[k] = xi
+                end
+                
+                tsk.nread += 1
+                settiming!(tsk, 0, round(Int64,t*1e9), i)
+                dev.ttot = t
+                if K == 1
+                    push!(buf, (x[1],0,0,0, K))
+                elseif K==2
+                    push!(buf, (x[1],x[2],0,0, K))
+                elseif K==3
+                    push!(buf, (x[1],x[2],x[3],0, K))
+                else
+                    push!(buf, (x[1],x[2],x[3],x[4], K))
+                end
+                if tsk.stop
+                    stopped = true
+                    println(io, "!")
+                    sleep(0.5)
+                    break
+                end
+            catch e
+                tsk.stop = true
+                exthrown = true
+                if isa(e, InterruptException)
+                    # Ctrl-C captured!
+                    # We want to stop the data acquisition safely and then rethwrow it!
+                    tsk.stop = true
+                else
+                    throw(e)
+                end
             end
-            tn = time_ns()
-            tsk.nread += 1
-            settiming!(tsk, t0, tn, i)
-            dev.ttot = (tn-t0) / 1e9
-            push!(buf, (x[1],0,0,0))
+            
         end
-        s = readline(io)
-        ttot = parse(Float64, s)
-        dev.ttot = ttot
-        ok = readline(io)
         tsk.isreading = false
-        if ok != "OK"
-            error("Expected OK at the end of data acquisition. Got $ok")
+        for k in 1:3
+            ok = readline(io)
+            if ok == "OK"
+                break
+            end
+            sleep(0.5)
+            if k == 3
+                error("Expected OK at the end of data acquisition. Got $ok")
+            end
+            
         end
-        dev.env[:,2] .= envconds(io)
     end
         
     
@@ -236,9 +377,9 @@ end
 
 
     
-function DAQCore.daqstart(dev::DaqJAnem)
+function DAQCore.daqstart(dev::AbstractDaqJAnem)
     if isreading(dev)
-        error("DaqJAnem already reading!")
+        error("Daq already reading!")
     end
     if dev.usethread
         tsk = Threads.@spawn scan!(dev)
@@ -251,40 +392,24 @@ function DAQCore.daqstart(dev::DaqJAnem)
 end
 
 
-function readaioutput(dev::DaqJAnem)
+function readaioutput(dev::AbstractDaqJAnem)
     isreading(dev) && error("Still acquiring data!")
 
     tsk = dev.task
     buf = dev.buffer
     nsamples = length(buf)
-    E = zeros(1,nsamples)
+    nchans = numchannels(dev.chans)
+    E = zeros(nchans,nsamples)
     for (i,x) in enumerate(buf)
-        E[1,i] = 2.048 * x[1] / 32768
+        for k in 1:nchans
+            E[k,i] =  2.048 * x[k] / 32767
+        end
     end
         
     fs = nsamples / dev.ttot
 
     return E, fs, tsk.time
         
-end
-
-
-mutable struct AnemData{T,AT<:AbstractMatrix{T},ET<:AbstractMatrix{T},
-                        S<:AbstractDaqSampling,CH} <: DAQCore.AbstractMeasData
-    "Device that generated the data"
-    devname::String
-    "Type of device"
-    devtype::String
-    "Sampling timing data"
-    sampling::S
-    "Data acquired"
-    data::AT
-    "Environmental conditions"
-    env::ET
-    "Channel Information"
-    chans::CH
-    "Units of each channel"
-    units::Vector{String}
 end
 
 
@@ -297,7 +422,7 @@ function DAQCore.daqread(dev::DaqJAnem)
     unit = "V"
     sampling = DaqSamplingRate(fs, length(E), t)
 
-    return AnemData(devname(dev), devtype(dev), sampling, E, dev.env,
+    return MeasData(devname(dev), devtype(dev), sampling, E, dev.env,
                     dev.chans, ["V"])
               
     
@@ -310,7 +435,7 @@ function DAQCore.daqacquire(dev::DaqJAnem)
     unit = "V"
     sampling = DaqSamplingRate(fs, length(E), t)
     
-    return AnemData(devname(dev), devtype(dev), sampling, E, dev.env,
+    return MeasData(devname(dev), devtype(dev), sampling, E,
                     dev.chans, ["V"])
 end
 
@@ -318,14 +443,53 @@ end
 
 
 
-"What was the sampling rate of the data acquisition?"
-samplingrate(d::AnemData) = samplingrate(d.sampling)
-samplingtimes(d::AnemData) = samplingtimes(d.sampling)
-samplinghours(d::AnemData) = samplinghours(d.sampling)
-samplingperiod(d::AnemData) = samplingperiod(d.sampling)
-daqtime(d::AnemData) = daqtime(d.sampling)
 
-"Access to the data acquired"
-measdata(d::AnemData) = d.data
-daqchannels(d::AnemData) = daqchannels(d.chans)
-numchannels(d::AnemData) = numchannels(d.chans)
+function readcmd(dev::AbstractDaqJAnem, cmd, timeout=5)
+    openjanem(ipaddr(dev), portnum(dev), timeout) do io
+        x = String[]
+        println(io, "READ $cmd")
+        s = readline(io)
+        if s == "ERR"
+            err = parse(Int, strip(readline(io)))
+            readline(io)
+            error("Rerror reading $cmd: code $err")
+        end
+        s = readline(io)
+        N = parse(Int, s)
+
+        for i in 1:N
+            push!(x, readline(io))
+        end
+        ok = readline(io)
+        if ok != "OK"
+            error("OK expected. Got $ok!")
+        end
+        
+        x
+    end
+    
+end
+
+readpressure(dev::AbstractDaqJAnem, timeout=1) =
+    parse(Float64, readcmd(dev, "P", timeout)[1])
+
+readpressuretemp(dev::AbstractDaqJAnem, timeout=1) =
+    parse(Float64, readcmd(dev, "PT", timeout)[1])
+
+readhumidity(dev::AbstractDaqJAnem, timeout=1) =
+    parse(Float64, readcmd(dev, "H", timeout)[1])
+
+readhumiditytemp(dev::AbstractDaqJAnem, timeout=1) =
+    parse(Float64, readcmd(dev, "HT", timeout)[1])
+
+readtemperature(dev::AbstractDaqJAnem, i=0, timeout=2) =
+    parse(Float64, readcmd(dev, "T$i", timeout)[1])
+
+function readaichan(dev::AbstractDaqJAnem, i=0, timeout=2)
+    bits = parse(Float64, readcmd(dev, "AI$i", timeout)[1])
+
+    return (bits / 32767) * 2.048
+end
+
+
+
