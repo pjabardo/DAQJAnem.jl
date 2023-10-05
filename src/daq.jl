@@ -58,6 +58,23 @@ end
 
 
 
+function timeoutreadline(io, tout=5)
+    line = ""
+    ev = Base.Event()
+    Timer(_-> begin
+              timeout=true
+              notify(ev)
+          end, tout)
+    @async begin
+        line = readline(io)
+        notify(ev)
+    end
+    wait(ev)
+          
+    line
+end
+
+
 function openjanem(ipaddr::IPv4, port=9525,  timeout=5)
         
     sock = TCPSocket()
@@ -142,10 +159,11 @@ function DaqJAnem(; devname="Anemometer", ip="192.168.0.100",
     buf = CircularBuffer{NTuple{5,Int16}}(buflen)
     task = DaqTask()
     ch = DaqChannels(["E0"], [0])
-
+    
     temp = openjanem(ipaddr, port, 2) do io
         clearchans(io)
         addsinglechan(io, 0)
+        loadtemp!(io)
         tempchans(io)
     end
     
@@ -181,6 +199,17 @@ function addsinglechan(io::TCPSocket, ch)
 end
 
 
+function sum_bytes(s)
+    bs = parse.(UInt64, s)
+    total = zero(UInt64)
+    m = zero(UInt64)
+    for b in bs
+        total = total + (b << m)
+        m = m + 8
+    end
+    return total
+end
+
 function tempchans(io::TCPSocket)
     println(io, "TEMPCHANS")
     readline(io)
@@ -189,14 +218,7 @@ function tempchans(io::TCPSocket)
     TID = UInt64[]
     for i in 1:N
         s = split(strip(readline(io)))
-        id = UInt64(0)
-        m = 0
-        for sk in s
-            k = parse(UInt8, sk)
-            id += k << m
-            m += 8
-        end
-        push!(TID, id)
+        push!(TID, sum_bytes(s))
     end
     return TID
 end
@@ -225,8 +247,15 @@ function loadtemp!(io::TCPSocket)
     if ok != "OK"
         error("Error loading DS18B20 temperature sensor info.")
     end
+    return N
     
 end
+
+loadtemp!(dev::AbstractDaqJAnem) = 
+    openjanem(dev, 3) do io
+        loadtemp!(io)
+    end
+
 
 function readchannels(io::TCPSocket)
     println(io, "CHANS")
@@ -283,13 +312,13 @@ function DAQCore.daqaddinput(dev::DaqJAnem, chans=0; names="E")
 end
 
 function DAQCore.daqconfigdev(dev::DaqJAnem; AVG=1, FPS=1)
-    openjanem(dev, 3) do io
-        setvar(io, "AVG", AVG)
-        iparam!(dev.config, "AVG", AVG)
+#    openjanem(dev, 3) do io
+#        setvar(io, "AVG", AVG)
+    iparam!(dev.config, "AVG", AVG)
         
-        setvar(io, "FPS", FPS)
-        iparam!(dev.config, "FPS", FPS)
-    end
+#        setvar(io, "FPS", FPS)
+    iparam!(dev.config, "FPS", FPS)
+  #  end
     
 end
 
@@ -302,23 +331,38 @@ function scan!(dev::DaqJAnem)
 
     buf = dev.buffer
     empty!(buf)
-
+    avg = iparam(dev.config, "AVG")
+    fps = iparam(dev.config, "FPS")
+    
     exthrown = false # No exception thrown!
-
+    dtmax = (25*avg) * 50 / 1000   # Timout
     dev.ttot = 0.0
-    openjanem(ipaddr(dev), portnum(dev), 5) do io
+    openjanem(dev, 3) do io
         tsk.time = now()
-        println(io, "SCAN")
+        println(io, "SCAN $fps $avg")
         tsk.isreading = true
-        s = readline(io)
+        s = strip(readline(io))
+        if s == "ERR"
+            err = parse(Int, strip(readline(io)))
+            readline(io)
+            error("SCAN error code $err")
+        elseif s != "START"
+            error("Unknown error $s")
+        end
+        
+        s = strip(readline(io))
         N = parse(Int, s)
         s = readline(io)
         K = parse(Int, s)
         x = zeros(Int16,K) 
         t = 0.0
-        for i in 1:N
-            try
-                s = strip(readline(io))
+        try
+            for i in 1:N
+                s = strip(timeoutreadline(io, max(dtmax,5)))
+                if s==""
+                    error("Some kind of error in scanning")
+                end
+                
                 ss = split(s)
                 idx = parse(Int, ss[1])
                 t = parse(Float64, ss[2]) 
@@ -326,6 +370,7 @@ function scan!(dev::DaqJAnem)
                     xi = parse(Int16, ss[k+2])
                     x[k] = xi
                 end
+                
                 
                 tsk.nread += 1
                 settiming!(tsk, 0, round(Int64,t*1e9), i)
@@ -345,19 +390,24 @@ function scan!(dev::DaqJAnem)
                     sleep(0.5)
                     break
                 end
-            catch e
-                tsk.stop = true
-                exthrown = true
-                if isa(e, InterruptException)
-                    # Ctrl-C captured!
-                    # We want to stop the data acquisition safely and then rethwrow it!
-                    tsk.stop = true
-                else
-                    throw(e)
-                end
+                
             end
             
+        catch e
+            tsk.stop = true
+            exthrown = true
+            if isa(e, InterruptException)
+                # Ctrl-C captured!
+                # We want to stop the data acquisition safely and then rethwrow it!
+                tsk.stop = true
+            else
+                tsk.isreading = false
+                tsk.stop = true
+                throw(e)
+            end
         end
+        
+        
         tsk.isreading = false
         for k in 1:3
             ok = readline(io)
@@ -375,6 +425,9 @@ function scan!(dev::DaqJAnem)
     
 end
 
+function DAQCore.daqstop(dev::DaqJAnem)
+
+end
 
     
 function DAQCore.daqstart(dev::AbstractDaqJAnem)
@@ -418,11 +471,11 @@ function DAQCore.daqread(dev::DaqJAnem)
 
     wait(dev.task.task)
 
-    E, fs, t = readaioutpuyt(dev)
+    E, fs, t = readaioutput(dev)
     unit = "V"
     sampling = DaqSamplingRate(fs, length(E), t)
 
-    return MeasData(devname(dev), devtype(dev), sampling, E, dev.env,
+    return MeasData(devname(dev), devtype(dev), sampling, E,
                     dev.chans, ["V"])
               
     
