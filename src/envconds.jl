@@ -1,9 +1,9 @@
 using Dates
 
 import DAQCore: CircMatBuffer
-export DaqEnvConds
+export EnvConds
 
-mutable struct DaqEnvConds <: AbstractDaqJAnem
+mutable struct EnvConds{J} <: AbstractJAnem
     devname::String
     devtype::String
     ipaddr::IPv4
@@ -11,28 +11,41 @@ mutable struct DaqEnvConds <: AbstractDaqJAnem
     buffer::CircMatBuffer{Float64}
     task::DaqTask
     config::DaqConfig
-    chans::DaqChannels{Int}
+    chans::DaqChannels{Vector{String}}
     usethread::Bool
     ttot::Float64
+    janem::J
 end
 
 
 
-function DaqEnvConds(devname="Anemometer"; ipaddr="192.168.0.100",
+function EnvConds(devname="EnvConds"; ipaddr="192.168.0.100", port=9525,
                   timeout=10, buflen=10000, tag="", sn="",usethread=true)
-    dtype="DaqEnvConds"
-    ip = IPv4(ipaddr)
-    port = 9525
+    dtype="EnvConds"
     
-    config = DaqConfig(ip=ipaddr, port=9525, AVG=1, FPS=1)
+    buf = CircMatBuffer{Float64}(12,buflen)
+    task = DaqTask()
+    ch = DaqChannels(["Pa", "H", "T0", "T1", "T2"], 0)
+    config = DaqConfig(tag=tag, sn=sn, ip=ipaddr, port=port)
+    return EnvConds{Bool}(devname, dtype, IPv4(ipaddr), port, buf, task, config,
+                    ch, usethread, 0.0, false)
+    
+end
+
+function EnvConds(devname="EnvConds", janem::JAnem; 
+                  timeout=10, buflen=10000, tag="", sn="",usethread=true)
+    dtype="EnvConds"
+    
     buf = CircMatBuffer{Float64}(5,buflen)
     task = DaqTask()
     ch = DaqChannels(["Pa", "H", "T0", "T1", "T2"], 0)
     
-    return DaqEnvConds(devname, dtype, ip, 9525, buf, task, config,
-                    ch, usethread, 0.0)
+    return DaqEnvConds{JAnem}(devname, dtype, janem.ipaddr, janem.port, buf, task,
+                              janem.config, config, ch, usethread, 0.0, false)
     
 end
+
+
 
 
 function DAQCore.daqconfigdev(dev::DaqEnvConds; time=1.0)

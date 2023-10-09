@@ -4,7 +4,7 @@ using DAQCore
 import DataStructures: CircularBuffer
 
 import Dates: now
-export DaqJAnem
+export JAnem
 export devname, devtype, samplingrate, daqconfigdev, daqstart, daqread, daqacquire
 export samplingrate, samplingtimes, samplinghours, samplingperiod
 export daqaddinput, tempchans, tempchans!, loadtemp!, readchannels
@@ -12,11 +12,11 @@ export daqaddinput, tempchans, tempchans!, loadtemp!, readchannels
 export readpressure, readpressuretemp, readhumidity, readhumiditytemp
 export readtemperature, readaichan
 
-abstract type AbstractDaqJAnem <: AbstractInputDev end
+abstract type AbstractJAnem <: AbstractInputDev end
 
 @enum JANEM_AQ JANEM_AI JANEM_ENV JANEM_BOTH
 
-mutable struct DaqJAnem <: AbstractDaqJAnem
+mutable struct JAnem <: AbstractJAnem
     devname::String
     devtype::String
     ipaddr::IPv4
@@ -34,24 +34,24 @@ end
 
 
 "Returns the IP address of the device"
-ipaddr(dev::AbstractDaqJAnem) = dev.ipaddr
+ipaddr(dev::AbstractJAnem) = dev.ipaddr
 
 "Returns the port number used for TCP/IP communication"
-portnum(dev::AbstractDaqJAnem) = dev.port
+portnum(dev::AbstractJAnem) = dev.port
 
-DAQCore.devtype(dev::AbstractDaqJAnem) = "DaqJAnem"
+DAQCore.devtype(dev::AbstractJAnem) = "JAnem"
 
-"Is DaqJAnem acquiring data?"
-DAQCore.isreading(dev::AbstractDaqJAnem) = isreading(dev.task)
+"Is JAnem acquiring data?"
+DAQCore.isreading(dev::AbstractJAnem) = isreading(dev.task)
 
 "How many samples have been read?"
-DAQCore.samplesread(dev::AbstractDaqJAnem) = samplesread(dev.task)
+DAQCore.samplesread(dev::AbstractJAnem) = samplesread(dev.task)
 
 "Convert number to string justifying to the right by padding with zeros"
 numstring(x::Integer, n=2) = string(10^n+x)[2:end]
 
-function Base.show(io::IO, dev::AbstractDaqJAnem)
-    println(io, "DaqJAnem")
+function Base.show(io::IO, dev::AbstractJAnem)
+    println(io, "JAnem")
     println(io, "    Dev Name: $(devname(dev))")
     println(io, "    IP: $(string(dev.ipaddr))")
 end
@@ -94,7 +94,7 @@ function openjanem(ipaddr::IPv4, port=9525,  timeout=5)
     return sock
 end
 
-openjanem(dev::AbstractDaqJAnem,  timeout=5) = openjanem(ipaddr(dev), portnum(dev), timeout)
+openjanem(dev::AbstractJAnem,  timeout=5) = openjanem(ipaddr(dev), portnum(dev), timeout)
 
 
 function openjanem(fun::Function, ip, port=9525, timeout=5)
@@ -108,7 +108,7 @@ function openjanem(fun::Function, ip, port=9525, timeout=5)
     end
 end
 
-function openjanem(fun::Function, dev::AbstractDaqJAnem, timeout=5)
+function openjanem(fun::Function, dev::AbstractJAnem, timeout=5)
     io = openjanem(ipaddr(dev), portnum(dev), timeout)
     try
         fun(io)
@@ -131,7 +131,7 @@ function setvar(io, var, val)
     return 0
 end
 
-function status(dev::AbstractDaqJAnem)
+function status(dev::AbstractJAnem)
     openjanem(ipaddr(dev), portnum(dev), 1) do io
         status(io)
     end
@@ -145,9 +145,9 @@ end
   
     
 
-function DaqJAnem(; devname="Anemometer", ip="192.168.0.100",
+function JAnem(; devname="Anemometer", ip="192.168.0.100",
                   timeout=10, buflen=100_000, port=9525, tag="", sn="",usethread=true)
-    dtype="DaqJAnem"
+    dtype="JAnem"
     ipaddr = IPv4(ip)
     
     openjanem(ipaddr, port, timeout) do io
@@ -167,7 +167,7 @@ function DaqJAnem(; devname="Anemometer", ip="192.168.0.100",
         tempchans(io)
     end
     
-    return DaqJAnem(devname, dtype, ipaddr, 9525, buf, task, config,
+    return JAnem(devname, dtype, ipaddr, 9525, buf, task, config,
                     ch, usethread, 0.0, temp)
     
 end
@@ -180,7 +180,7 @@ function clearchans(io::TCPSocket)
     end
 end
 
-clearchans(dev::DaqJAnem, timeout=2) = openjanem(dev,timeout) do io
+clearchans(dev::JAnem, timeout=2) = openjanem(dev,timeout) do io
     clearchans(io)
 end
 
@@ -223,13 +223,13 @@ function tempchans(io::TCPSocket)
     return TID
 end
 
-function tempchans(dev::AbstractDaqJAnem)
+function tempchans(dev::AbstractJAnem)
     openjanem(dev, 2) do io
         tempchans(io)
     end
 end
 
-function tempchans!(dev::AbstractDaqJAnem)
+function tempchans!(dev::AbstractJAnem)
     temp = openjanem(dev, 2) do io
         tempchans(io)
     end
@@ -251,7 +251,7 @@ function loadtemp!(io::TCPSocket)
     
 end
 
-loadtemp!(dev::AbstractDaqJAnem) = 
+loadtemp!(dev::AbstractJAnem) = 
     openjanem(dev, 3) do io
         loadtemp!(io)
     end
@@ -268,11 +268,11 @@ function readchannels(io::TCPSocket)
     end
     return chans
 end
-readchannels(dev::DaqJAnem, timeout=3) = openjanem(dev, timeout) do io
+readchannels(dev::JAnem, timeout=3) = openjanem(dev, timeout) do io
     readchannels(io)
 end
 
-function DAQCore.daqaddinput(dev::DaqJAnem, chans=0; names="E")
+function DAQCore.daqaddinput(dev::JAnem, chans=0; names="E")
     for c in chans
         if c < 0 || c > 3
             error("Channels should be 0-3. Got '$c'")
@@ -311,7 +311,7 @@ function DAQCore.daqaddinput(dev::DaqJAnem, chans=0; names="E")
         
 end
 
-function DAQCore.daqconfigdev(dev::DaqJAnem; AVG=1, FPS=1)
+function DAQCore.daqconfigdev(dev::JAnem; AVG=1, FPS=1)
 #    openjanem(dev, 3) do io
 #        setvar(io, "AVG", AVG)
     iparam!(dev.config, "AVG", AVG)
@@ -324,9 +324,9 @@ end
 
 
 
-function scan!(dev::DaqJAnem) 
+function scan!(dev::JAnem) 
     tsk = dev.task
-    isreading(tsk) && error("DaqJAnem is already reading data!")
+    isreading(tsk) && error("JAnem is already reading data!")
     cleartask!(tsk)
 
     buf = dev.buffer
@@ -425,12 +425,12 @@ function scan!(dev::DaqJAnem)
     
 end
 
-function DAQCore.daqstop(dev::DaqJAnem)
+function DAQCore.daqstop(dev::JAnem)
 
 end
 
     
-function DAQCore.daqstart(dev::AbstractDaqJAnem)
+function DAQCore.daqstart(dev::AbstractJAnem)
     if isreading(dev)
         error("Daq already reading!")
     end
@@ -445,7 +445,7 @@ function DAQCore.daqstart(dev::AbstractDaqJAnem)
 end
 
 
-function readaioutput(dev::AbstractDaqJAnem)
+function readaioutput(dev::AbstractJAnem)
     isreading(dev) && error("Still acquiring data!")
 
     tsk = dev.task
@@ -467,7 +467,7 @@ end
 
 
 
-function DAQCore.daqread(dev::DaqJAnem)
+function DAQCore.daqread(dev::JAnem)
 
     wait(dev.task.task)
 
@@ -481,7 +481,7 @@ function DAQCore.daqread(dev::DaqJAnem)
     
 end
 
-function DAQCore.daqacquire(dev::DaqJAnem)
+function DAQCore.daqacquire(dev::JAnem)
 
     scan!(dev)
     E, fs, t = readaioutput(dev)
@@ -497,7 +497,7 @@ end
 
 
 
-function readcmd(dev::AbstractDaqJAnem, cmd, timeout=5)
+function readcmd(dev::AbstractJAnem, cmd, timeout=5)
     openjanem(ipaddr(dev), portnum(dev), timeout) do io
         x = String[]
         println(io, "READ $cmd")
@@ -523,22 +523,22 @@ function readcmd(dev::AbstractDaqJAnem, cmd, timeout=5)
     
 end
 
-readpressure(dev::AbstractDaqJAnem, timeout=1) =
+readpressure(dev::AbstractJAnem, timeout=1) =
     parse(Float64, readcmd(dev, "P", timeout)[1])
 
-readpressuretemp(dev::AbstractDaqJAnem, timeout=1) =
+readpressuretemp(dev::AbstractJAnem, timeout=1) =
     parse(Float64, readcmd(dev, "PT", timeout)[1])
 
-readhumidity(dev::AbstractDaqJAnem, timeout=1) =
+readhumidity(dev::AbstractJAnem, timeout=1) =
     parse(Float64, readcmd(dev, "H", timeout)[1])
 
-readhumiditytemp(dev::AbstractDaqJAnem, timeout=1) =
+readhumiditytemp(dev::AbstractJAnem, timeout=1) =
     parse(Float64, readcmd(dev, "HT", timeout)[1])
 
-readtemperature(dev::AbstractDaqJAnem, i=0, timeout=2) =
+readtemperature(dev::AbstractJAnem, i=0, timeout=2) =
     parse(Float64, readcmd(dev, "T$i", timeout)[1])
 
-function readaichan(dev::AbstractDaqJAnem, i=0, timeout=2)
+function readaichan(dev::AbstractJAnem, i=0, timeout=2)
     bits = parse(Float64, readcmd(dev, "AI$i", timeout)[1])
 
     return (bits / 32767) * 2.048
