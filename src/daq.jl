@@ -474,22 +474,54 @@ function DAQCore.daqread(dev::JAnem)
     E, fs, t = readaioutput(dev)
     unit = "V"
     sampling = DaqSamplingRate(fs, length(E), t)
-
+    
     return MeasData(devname(dev), devtype(dev), sampling, E,
                     dev.chans, ["V"])
               
     
 end
 
-function DAQCore.daqacquire(dev::JAnem)
+function read_env(dev::JAnem)
+    Pa = readpressure(dev)
+    Ta = readpressuretemp(dev)
+    H  = readhumidity(dev)
+    Th = readhumiditytemp(dev)
+    T0 = readtemperature(dev,0)
+    T1 = readtemperature(dev,1)
+    T2 = readtemperature(dev,2)
+    Pa1 = round(Pa/1e3, digits=3)
+    return [Pa1, Ta, H, Th, T0, T1, T2]
+end
 
-    scan!(dev)
-    E, fs, t = readaioutput(dev)
-    unit = "V"
-    sampling = DaqSamplingRate(fs, length(E), t)
+function DAQCore.daqacquire(dev::JAnem)
+    for i in 1:3
+        try
+            println("Lendo as condições ambientais...")
+            env = read_env(dev)
+            println(env)
+            println("Lendo o anemometro...")
+            scan!(dev)
+            E, fs, t = readaioutput(dev)
+            unit = "V"
+            sampling = DaqSamplingRate(fs, length(E), t)
+            
+            E = MeasData(devname(dev), devtype(dev), sampling, E,
+                         dev.chans, ["V"])
+            ech = ["Pa", "Ta", "H", "Th", "T0", "T1", "T2"]
+            echans = DaqChannels(ech)
+            eunits = ["kPa", "°C", "", "°C", "°C", "°C", "°C"]
+            env1 = MeasData(devname(dev)*"_envconds", devtype(dev),
+                            DaqSamplingTimes([t]),
+                            reshape(env, (length(env),1)),
+                            echans, eunits)
+            
+            return MeasDataSet(devname(dev), "JAnem", t, (E,env1))
+        catch e
+            println("ERRO LENDO OS DADOS. TENTANDO NOVAMENTR")
+        end
+    end
+    error("NÂO FOI POSSIVEL LER OS DADOS MESMO APÓS 3 TENTATIVAS!")
     
-    return MeasData(devname(dev), devtype(dev), sampling, E,
-                    dev.chans, ["V"])
 end
 
 
