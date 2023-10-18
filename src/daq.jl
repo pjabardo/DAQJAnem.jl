@@ -430,20 +430,6 @@ function DAQCore.daqstop(dev::JAnem)
 end
 
     
-function DAQCore.daqstart(dev::AbstractJAnem)
-    if isreading(dev)
-        error("Daq already reading!")
-    end
-    if dev.usethread
-        tsk = Threads.@spawn scan!(dev)
-    else
-        tsk = @async scan!(dev)
-    end
-    dev.task.task = tsk
-    return tsk
-    
-end
-
 
 function readaioutput(dev::AbstractJAnem)
     isreading(dev) && error("Still acquiring data!")
@@ -467,20 +453,6 @@ end
 
 
 
-function DAQCore.daqread(dev::JAnem)
-
-    wait(dev.task.task)
-
-    E, fs, t = readaioutput(dev)
-    unit = "V"
-    sampling = DaqSamplingRate(fs, length(E), t)
-    
-    return MeasData(devname(dev), devtype(dev), sampling, E,
-                    dev.chans, ["V"])
-              
-    
-end
-
 function read_env(dev::JAnem)
     Pa = readpressure(dev)
     Ta = readpressuretemp(dev)
@@ -496,10 +468,10 @@ end
 function DAQCore.daqacquire(dev::JAnem)
     for i in 1:3
         try
-            println("Lendo as condições ambientais...")
+            #println("Lendo as condições ambientais...")
             env = read_env(dev)
-            println(env)
-            println("Lendo o anemometro...")
+            #println(env)
+            #println("Lendo o anemometro...")
             scan!(dev)
             E, fs, t = readaioutput(dev)
             unit = "V"
@@ -521,6 +493,36 @@ function DAQCore.daqacquire(dev::JAnem)
         end
     end
     error("NÂO FOI POSSIVEL LER OS DADOS MESMO APÓS 3 TENTATIVAS!")
+    
+end
+
+function DAQCore.daqstart(dev::AbstractJAnem)
+    if isreading(dev)
+        error("Daq already reading!")
+    end
+    if dev.usethread
+        tsk = Threads.@spawn scan!(dev)
+    else
+        tsk = @async scan!(dev)
+    end
+    dev.task.task = tsk
+    return tsk
+    
+end
+
+
+
+function DAQCore.daqread(dev::JAnem)
+
+    wait(dev.task.task)
+
+    E, fs, t = readaioutput(dev)
+    unit = "V"
+    sampling = DaqSamplingRate(fs, length(E), t)
+    
+    return MeasData(devname(dev), devtype(dev), sampling, E,
+                    dev.chans, ["V"])
+              
     
 end
 
