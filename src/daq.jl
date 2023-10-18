@@ -11,6 +11,8 @@ export daqaddinput, tempchans, tempchans!, loadtemp!, readchannels
 
 export readpressure, readpressuretemp, readhumidity, readhumiditytemp
 export readtemperature, readaichan
+export readenv, listenvchans, addenvchans, envchans, numenvchans
+
 
 abstract type AbstractJAnem <: AbstractInputDev end
 
@@ -28,6 +30,7 @@ mutable struct JAnem <: AbstractJAnem
     usethread::Bool
     ttot::Float64
     temp::Vector{UInt64}
+    envchans::DaqChannels{Vector{String}}
 end
 
 
@@ -142,10 +145,70 @@ function status(io::TCPSocket)
     sleep(0.1)
     return readline(io)
 end
-  
-    
 
-function JAnem(; devname="Anemometer", ip="192.168.0.100",
+
+function listenvchans(dev::JAnem)
+    
+    ch = ["Pa", "Ta", "H", "Th"]  # Available channels from BMP280 and DHT22
+    # Now check the temperature channels.
+    for i in eachindex(dev.temp)
+        i1 = i-1
+        push!(ch, "T$i1")
+    end
+    return ch
+end
+
+function addenvchans(dev::JAnem, chans; names=nothing)
+    avchans = listenvchans(dev)
+    
+    # Check if  every channel in chans is possible
+    for ch in chans
+        if ch ∉ avchans
+            error("Channel $ch is unknown!")
+        end
+    end
+    if isnothing(names)
+        names = chans
+    else
+        if length(chans) != length(names)
+            error("The number of channel names must be equal to the number of channels!")
+        end
+    end
+
+    chs = [string(ch) for ch in chans]
+    chn = [string(ch) for ch in names]
+    dev.envchans = DaqChannels(chs, chn)
+    
+end
+
+function envchansunits(dev::JAnem)
+    chans = physchans(dev.envchans)
+    units = String[]
+    for ch in chans
+        if ch == "Pa"
+            push!(units, "Pa")
+        elseif ch=="H"
+            push!(units, "")
+        elseif occursin("T", ch)
+            push!(units, "°C")
+        else
+            error("Channel $ch has unknown unit.")
+        end
+    end
+    return units
+end
+
+
+
+    
+      
+
+envchans(dev::JAnem) = daqchannels(dev.envchans)
+numenvchans(dev::JAnem) = numchannels(dev.envchans)
+
+
+
+function JAnem(; devname="Anemometer", ip="192.168.0.101",
                   timeout=10, buflen=100_000, port=9525, tag="", sn="",usethread=true)
     dtype="JAnem"
     ipaddr = IPv4(ip)
@@ -166,9 +229,13 @@ function JAnem(; devname="Anemometer", ip="192.168.0.100",
         loadtemp!(io)
         tempchans(io)
     end
+    # Add environement channels
+    echans = ["Pa"; "H"; [string("T", i-1) for i in eachindex(temp)]]
+    
+    envchans = DaqChannels(echans, echans)
     
     return JAnem(devname, dtype, ipaddr, 9525, buf, task, config,
-                    ch, usethread, 0.0, temp)
+                    ch, usethread, 0.0, temp, envchans)
     
 end
 
@@ -453,42 +520,52 @@ end
 
 
 
-function read_env(dev::JAnem)
-    Pa = readpressure(dev)
-    Ta = readpressuretemp(dev)
-    H  = readhumidity(dev)
-    Th = readhumiditytemp(dev)
-    T0 = readtemperature(dev,0)
-    T1 = readtemperature(dev,1)
-    T2 = readtemperature(dev,2)
-    Pa1 = round(Pa/1e3, digits=3)
-    return [Pa1, Ta, H, Th, T0, T1, T2]
+function readenv(dev::JAnem)
+    chans = physchans(dev.envchans)
+    env = Float64[]
+    
+    for ch in chans
+        if ch=="Pa"
+            push!(env, readpressure(dev))
+        elseif ch=="Ta"
+            push!(env, readpressuretemp(dev))
+        elseif ch=="H"
+            push!(env, readhumidity(dev))
+        elseif ch=="Th"
+            push!(env, readhumiditytemp(dev))
+        elseif !isnothing(match(r"T[0-9]+", ch))
+            idx = parse(Int, ch[2:end])
+            if 0 ≤ idx < length(dev.temp)
+                push!(env, readtemperature(dev, idx))
+            else
+                error("Unknown channel $ch")
+            end
+        else
+            error("Unknown channel $ch")
+        end
+    end
+    return env
 end
 
 function DAQCore.daqacquire(dev::JAnem)
     for i in 1:3
         try
-            #println("Lendo as condições ambientais...")
-            env = read_env(dev)
-            #println(env)
-            #println("Lendo o anemometro...")
             scan!(dev)
             E, fs, t = readaioutput(dev)
             unit = "V"
             sampling = DaqSamplingRate(fs, length(E), t)
-            
+            env = readenv(dev)
             E = MeasData(devname(dev), devtype(dev), sampling, E,
-                         dev.chans, ["V"])
-            ech = ["Pa", "Ta", "H", "Th", "T0", "T1", "T2"]
-            echans = DaqChannels(ech)
-            eunits = ["kPa", "°C", "", "°C", "°C", "°C", "°C"]
+                         dev.chans, repeat(["V"], numchannels(dev)))
+            eunits = envchansunits(dev)
             env1 = MeasData(devname(dev)*"_envconds", devtype(dev),
                             DaqSamplingTimes([t]),
                             reshape(env, (length(env),1)),
-                            echans, eunits)
+                            dev.envchans, eunits)
             
             return MeasDataSet(devname(dev), "JAnem", t, (E,env1))
         catch e
+            throw(e)
             println("ERRO LENDO OS DADOS. TENTANDO NOVAMENTR")
         end
     end
@@ -515,14 +592,22 @@ end
 function DAQCore.daqread(dev::JAnem)
 
     wait(dev.task.task)
-
+    dev.task.isreading = false
+    
+    scan!(dev)
     E, fs, t = readaioutput(dev)
     unit = "V"
     sampling = DaqSamplingRate(fs, length(E), t)
+    env = readenv(dev)
+    E = MeasData(devname(dev), devtype(dev), sampling, E,
+                 dev.chans, repeat(["V"], numchannels(dev)))
+    eunits = envchansunits(dev)
+    env1 = MeasData(devname(dev)*"_envconds", devtype(dev),
+                    DaqSamplingTimes([t]),
+                    reshape(env, (length(env),1)),
+                    dev.envchans, eunits)
     
-    return MeasData(devname(dev), devtype(dev), sampling, E,
-                    dev.chans, ["V"])
-              
+    return MeasDataSet(devname(dev), "JAnem", t, (E,env1))
     
 end
 

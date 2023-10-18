@@ -5,10 +5,8 @@ version = "1.0.0-DEV"
 
 [deps]
 DAQCore = "7b03aed3-9854-4651-ba28-76b88bef8818"
-DAQHDF5 = "3679571a-6675-409e-9618-c02a2349284e"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
-Hotwire = "d5de4fbe-640e-469d-b7ad-3c69fc3f3f61"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 
 [compat]
