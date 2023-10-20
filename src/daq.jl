@@ -147,7 +147,7 @@ function status(io::TCPSocket)
 end
 
 
-function listenvchans(dev::JAnem)
+function listenvchans(dev::AbstractJAnem)
     
     ch = ["Pa", "Ta", "H", "Th"]  # Available channels from BMP280 and DHT22
     # Now check the temperature channels.

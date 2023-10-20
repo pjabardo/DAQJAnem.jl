@@ -19,7 +19,7 @@ end
 
 
 
-function EnvConds(devname="EnvConds"; ipaddr="192.168.0.100", port=9525,
+function EnvConds(devname="EnvConds"; ip="192.168.0.101", port=9525,
                   timeout=10, buflen=10000, tag="", sn="",usethread=true)
     dtype="EnvConds"
     
