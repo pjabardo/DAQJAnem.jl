@@ -78,7 +78,7 @@ function timeoutreadline(io, tout=5)
 end
 
 
-function openjanem(ipaddr::IPv4, port=9525,  timeout=5)
+function openjanem(ipaddr, port=9525,  timeout=5)
         
     sock = TCPSocket()
     t = Timer(_ -> close(sock), timeout)
@@ -157,6 +157,7 @@ function listenvchans(dev::AbstractJAnem)
     end
     return ch
 end
+
 
 function addenvchans(dev::JAnem, chans; names=nothing)
     avchans = listenvchans(dev)
@@ -303,6 +304,7 @@ function tempchans!(dev::AbstractJAnem)
     dev.temp = temp
     temp
 end
+
 
 function loadtemp!(io::TCPSocket)
 
@@ -519,9 +521,36 @@ function readaioutput(dev::AbstractJAnem)
 end
 
 
+function readenv(io, chans)
+    nch = length(chans)
+    env = zeros(nch)
 
-function readenv(dev::JAnem)
-    chans = physchans(dev.envchans)
+    for (i,ch) in enumerate(chans)
+        if ch=="Pa"
+            cmd = "P"
+        elseif ch=="Ta"
+            cmd = "PT"
+        elseif ch=="H"
+            cmd = "H"
+        elseif ch=="Th"
+            cmd = "HT"
+        elseif ch[1] == 'T'
+            idx = parse(Int, ch[2:end])
+            cmd = "T$idx"
+        else
+            error("Unkonwn channel $ch")
+        end
+
+        env[i] = parse(Float64, readcmd(io, cmd)[1])
+    end
+    
+     return env   
+end
+
+
+
+function readenv(dev::AbstractJAnem, chans)
+    chans = physchans(chans)
     env = Float64[]
     
     for ch in chans
@@ -554,7 +583,7 @@ function DAQCore.daqacquire(dev::JAnem)
             E, fs, t = readaioutput(dev)
             unit = "V"
             sampling = DaqSamplingRate(fs, length(E), t)
-            env = readenv(dev)
+            env = readenv(dev, dev.envchans)
             E = MeasData(devname(dev), devtype(dev), sampling, E,
                          dev.chans, repeat(["V"], numchannels(dev)))
             eunits = envchansunits(dev)
@@ -598,7 +627,7 @@ function DAQCore.daqread(dev::JAnem)
     E, fs, t = readaioutput(dev)
     unit = "V"
     sampling = DaqSamplingRate(fs, length(E), t)
-    env = readenv(dev)
+    env = readenv(dev, dev.envchans)
     E = MeasData(devname(dev), devtype(dev), sampling, E,
                  dev.chans, repeat(["V"], numchannels(dev)))
     eunits = envchansunits(dev)
@@ -618,6 +647,12 @@ end
 
 function readcmd(dev::AbstractJAnem, cmd, timeout=5)
     openjanem(ipaddr(dev), portnum(dev), timeout) do io
+        readcmd(io, cmd)
+    end
+    
+end
+
+function readcmd(io, cmd)
         x = String[]
         println(io, "READ $cmd")
         s = readline(io)
@@ -636,10 +671,8 @@ function readcmd(dev::AbstractJAnem, cmd, timeout=5)
         if ok != "OK"
             error("OK expected. Got $ok!")
         end
-        
+       
         x
-    end
-    
 end
 
 readpressure(dev::AbstractJAnem, timeout=1) =
